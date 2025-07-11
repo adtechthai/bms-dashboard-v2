@@ -1,3 +1,10 @@
+'use client'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'edge'
+
+//
+
 import Image from "next/image";
 
 export default function Home() {
