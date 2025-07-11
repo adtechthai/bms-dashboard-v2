@@ -21,38 +21,8 @@ interface MetricData {
   totalBan: number
 }
 
-interface ChartData {
-  period: string
-  totalChat: number
-  totalLead: number
-  totalBuy: number
-  totalBuyValue: number
-  conversionRate: number
-}
 
-interface PsidInputsStatistics {
-  id: number
-  today_count: number
-  weekly_count: number
-  monthly_count: number
-  created_at: string
-}
 
-interface IntentStatistics {
-  id: number
-  intent_type: string
-  today_count: number
-  weekly_count: number
-  monthly_count: number
-  total_count: number
-}
-
-interface TrendData {
-  name: string
-  totalChat: number
-  totalLead: number
-  totalBuy: number
-}
 
 export default function BMSDashboard() {
   const [timeFrame, setTimeFrame] = useState<TimeFrame>('today')
@@ -70,8 +40,7 @@ export default function BMSDashboard() {
     totalBlocking: 0,
     totalBan: 0
   })
-  const [chartData, setChartData] = useState<ChartData[]>([])
-  const [trendData, setTrendData] = useState<TrendData[]>([])
+  const [chartData, setChartData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [chartLoading, setChartLoading] = useState(true)
   const [currentTime, setCurrentTime] = useState('')
@@ -234,18 +203,17 @@ export default function BMSDashboard() {
   useEffect(() => {
     fetchMetrics()
     fetchHistoricalData()
-    fetchTrendAnalysisData()
     
     // Optional: Set up real-time subscription
     const subscription = supabase
       .channel('trend-updates')
       .on('postgres_changes', 
         { event: '*', schema: 'public', table: 'psid_inputs_statistics' },
-        () => fetchTrendAnalysisData()
+        () => fetchHistoricalData()
       )
       .on('postgres_changes', 
         { event: '*', schema: 'public', table: 'intent_statistics' },
-        () => fetchTrendAnalysisData()
+        () => fetchHistoricalData()
       )
       .subscribe()
 
@@ -266,62 +234,6 @@ export default function BMSDashboard() {
     return () => clearInterval(interval)
   }, [])
 
-  const fetchTrendAnalysisData = async () => {
-    try {
-      // 1. ดึงข้อมูล Total Chat จาก psid_inputs_statistics
-      const { data: chatData, error: chatError } = await supabase
-        .from('psid_inputs_statistics')
-        .select('today_count, weekly_count, monthly_count')
-        .single()
-
-      if (chatError) throw chatError
-
-      // 2. ดึงข้อมูล Total Lead จาก intent_statistics
-      const { data: leadData, error: leadError } = await supabase
-        .from('intent_statistics')
-        .select('today_count, weekly_count, monthly_count')
-        .eq('intent_type', 'Lead')
-        .single()
-
-      if (leadError) throw leadError
-
-      // 3. ดึงข้อมูล Total Buy (Purchase) จาก intent_statistics
-      const { data: buyData, error: buyError } = await supabase
-        .from('intent_statistics')
-        .select('today_count, weekly_count, monthly_count')
-        .eq('intent_type', 'Purchase')
-        .single()
-
-      if (buyError) throw buyError
-
-      // 4. จัดรูปแบบข้อมูลสำหรับ BarChart
-      const trendData: TrendData[] = [
-        {
-          name: 'Today',
-          totalChat: chatData?.today_count || 0,
-          totalLead: leadData?.today_count || 0,
-          totalBuy: buyData?.today_count || 0
-        },
-        {
-          name: '7 Days (Exclude Today)',
-          totalChat: chatData?.weekly_count || 0,
-          totalLead: leadData?.weekly_count || 0,
-          totalBuy: buyData?.weekly_count || 0
-        },
-        {
-          name: '30 Days (Exclude Today)',
-          totalChat: chatData?.monthly_count || 0,
-          totalLead: leadData?.monthly_count || 0,
-          totalBuy: buyData?.monthly_count || 0
-        }
-      ]
-
-      setTrendData(trendData)
-      
-    } catch (error) {
-      console.error('Error fetching trend analysis data:', error)
-    }
-  }
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat('th-TH').format(num)
