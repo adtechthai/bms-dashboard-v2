@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 
-type TimeFrame = 'today' | 'weekly' | 'monthly'
+type TimeFrame = 'today' | '7days' | '30days'
 
 interface MetricData {
   totalChat: number
@@ -30,6 +30,30 @@ interface ChartData {
   conversionRate: number
 }
 
+interface PsidInputsStatistics {
+  id: number
+  today_count: number
+  weekly_count: number
+  monthly_count: number
+  created_at: string
+}
+
+interface IntentStatistics {
+  id: number
+  intent_type: string
+  today_count: number
+  weekly_count: number
+  monthly_count: number
+  total_count: number
+}
+
+interface TrendData {
+  name: string
+  totalChat: number
+  totalLead: number
+  totalBuy: number
+}
+
 export default function BMSDashboard() {
   const [timeFrame, setTimeFrame] = useState<TimeFrame>('today')
   const [metrics, setMetrics] = useState<MetricData>({
@@ -47,46 +71,67 @@ export default function BMSDashboard() {
     totalBan: 0
   })
   const [chartData, setChartData] = useState<ChartData[]>([])
+  const [trendData, setTrendData] = useState<TrendData[]>([])
   const [loading, setLoading] = useState(true)
   const [chartLoading, setChartLoading] = useState(true)
+  const [currentTime, setCurrentTime] = useState('')
 
   const fetchHistoricalData = async () => {
     setChartLoading(true)
     try {
-      // Generate sample historical data based on timeframe
-      const periods = timeFrame === 'today' ? 
-        Array.from({ length: 24 }, (_, i) => `${i}:00`) :
-        timeFrame === 'weekly' ? 
-        Array.from({ length: 7 }, (_, i) => {
-          const date = new Date()
-          date.setDate(date.getDate() - 6 + i)
-          return date.toLocaleDateString('th-TH', { weekday: 'short' })
-        }) :
-        Array.from({ length: 30 }, (_, i) => {
-          const date = new Date()
-          date.setDate(date.getDate() - 29 + i)
-          return date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })
+      const countColumn = timeFrame === 'today' ? 'today_count' : 
+                         timeFrame === '7days' ? 'weekly_count' : 'monthly_count'
+
+      // Fetch PSID Inputs (Total Chat)
+      const { data: psidData } = await supabase
+        .from('psid_inputs_statistics')
+        .select(countColumn)
+        .eq('metric_type', 'PSID Inputs')
+        .single()
+
+      // Fetch Intent Statistics for Lead and Purchase
+      const { data: intentData } = await supabase
+        .from('intent_statistics')
+        .select(`intent_type, ${countColumn}`)
+        .in('intent_type', ['Lead', 'Purchase'])
+
+      const totalChat = psidData?.[countColumn as keyof typeof psidData] || 0
+      let totalLead = 0
+      let totalBuy = 0
+
+      // Process intent statistics
+      if (intentData) {
+        intentData.forEach(item => {
+          const count = item[countColumn as keyof typeof item] || 0
+          if (item.intent_type === 'Lead') {
+            totalLead = count
+          } else if (item.intent_type === 'Purchase') {
+            totalBuy = count
+          }
         })
+      }
 
-      // Simulate historical data with some variation
-      const historicalData = periods.map((period) => {
-        const baseChat = Math.floor(Math.random() * 1000) + 500
-        const baseLead = Math.floor(baseChat * (0.15 + Math.random() * 0.1))
-        const baseBuy = Math.floor(baseLead * (0.1 + Math.random() * 0.05))
-        const baseBuyValue = baseBuy * (500 + Math.random() * 1000)
-        const conversionRate = baseLead > 0 ? (baseBuy / baseLead) * 100 : 0
-
-        return {
-          period,
-          totalChat: baseChat,
-          totalLead: baseLead,
-          totalBuy: baseBuy,
-          totalBuyValue: Math.floor(baseBuyValue),
-          conversionRate: Math.round(conversionRate * 100) / 100
+      // Create pie chart data
+      const total = totalChat + totalLead + totalBuy
+      const chartData = [
+        {
+          name: 'Total Chat',
+          value: totalChat,
+          percentage: total > 0 ? ((totalChat / total) * 100).toFixed(1) : '0.0'
+        },
+        {
+          name: 'Total Lead',
+          value: totalLead,
+          percentage: total > 0 ? ((totalLead / total) * 100).toFixed(1) : '0.0'
+        },
+        {
+          name: 'Total Buy',
+          value: totalBuy,
+          percentage: total > 0 ? ((totalBuy / total) * 100).toFixed(1) : '0.0'
         }
-      })
+      ]
 
-      setChartData(historicalData)
+      setChartData(chartData)
     } catch (error) {
       console.error('Error fetching historical data:', error)
     } finally {
@@ -98,7 +143,7 @@ export default function BMSDashboard() {
     setLoading(true)
     try {
       const countColumn = timeFrame === 'today' ? 'today_count' : 
-                         timeFrame === 'weekly' ? 'weekly_count' : 'monthly_count'
+                         timeFrame === '7days' ? 'weekly_count' : 'monthly_count'
 
       // Fetch PSID Inputs (Total Chat)
       const { data: psidData } = await supabase
@@ -189,7 +234,94 @@ export default function BMSDashboard() {
   useEffect(() => {
     fetchMetrics()
     fetchHistoricalData()
+    fetchTrendAnalysisData()
+    
+    // Optional: Set up real-time subscription
+    const subscription = supabase
+      .channel('trend-updates')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'psid_inputs_statistics' },
+        () => fetchTrendAnalysisData()
+      )
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'intent_statistics' },
+        () => fetchTrendAnalysisData()
+      )
+      .subscribe()
+
+    return () => {
+      subscription.unsubscribe()
+    }
   }, [timeFrame]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    // Set initial time
+    setCurrentTime(new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }))
+    
+    // Update time every minute
+    const interval = setInterval(() => {
+      setCurrentTime(new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }))
+    }, 60000)
+
+    return () => clearInterval(interval)
+  }, [])
+
+  const fetchTrendAnalysisData = async () => {
+    try {
+      // 1. ดึงข้อมูล Total Chat จาก psid_inputs_statistics
+      const { data: chatData, error: chatError } = await supabase
+        .from('psid_inputs_statistics')
+        .select('today_count, weekly_count, monthly_count')
+        .single()
+
+      if (chatError) throw chatError
+
+      // 2. ดึงข้อมูล Total Lead จาก intent_statistics
+      const { data: leadData, error: leadError } = await supabase
+        .from('intent_statistics')
+        .select('today_count, weekly_count, monthly_count')
+        .eq('intent_type', 'Lead')
+        .single()
+
+      if (leadError) throw leadError
+
+      // 3. ดึงข้อมูล Total Buy (Purchase) จาก intent_statistics
+      const { data: buyData, error: buyError } = await supabase
+        .from('intent_statistics')
+        .select('today_count, weekly_count, monthly_count')
+        .eq('intent_type', 'Purchase')
+        .single()
+
+      if (buyError) throw buyError
+
+      // 4. จัดรูปแบบข้อมูลสำหรับ BarChart
+      const trendData: TrendData[] = [
+        {
+          name: 'Today',
+          totalChat: chatData?.today_count || 0,
+          totalLead: leadData?.today_count || 0,
+          totalBuy: buyData?.today_count || 0
+        },
+        {
+          name: '7 Days (Exclude Today)',
+          totalChat: chatData?.weekly_count || 0,
+          totalLead: leadData?.weekly_count || 0,
+          totalBuy: buyData?.weekly_count || 0
+        },
+        {
+          name: '30 Days (Exclude Today)',
+          totalChat: chatData?.monthly_count || 0,
+          totalLead: leadData?.monthly_count || 0,
+          totalBuy: buyData?.monthly_count || 0
+        }
+      ]
+
+      setTrendData(trendData)
+      
+    } catch (error) {
+      console.error('Error fetching trend analysis data:', error)
+    }
+  }
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat('th-TH').format(num)
@@ -241,7 +373,9 @@ export default function BMSDashboard() {
               color === 'emerald' ? 'bg-emerald-500' :
               'bg-red-500'
             }`}></span>
-            {timeFrame.charAt(0).toUpperCase() + timeFrame.slice(1)} data
+            {timeFrame === 'today' ? 'Today' : 
+             timeFrame === '7days' ? '7 Days' : 
+             '30 Days'} data
           </div>
         )}
       </div>
@@ -261,14 +395,14 @@ export default function BMSDashboard() {
             <div className="text-right">
               <p className="text-sm text-gray-500">Bangkok Time (GMT+7)</p>
               <p className="text-sm font-medium text-gray-700">
-                {new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}
+                {currentTime || '--:--:--'}
               </p>
             </div>
           </div>
           
           {/* Timeframe Filter */}
           <div className="flex space-x-2 bg-white p-2 rounded-lg shadow-sm">
-            {(['today', 'weekly', 'monthly'] as TimeFrame[]).map((tf) => (
+            {(['today', '7days', '30days'] as TimeFrame[]).map((tf) => (
               <button
                 key={tf}
                 onClick={() => setTimeFrame(tf)}
@@ -278,7 +412,9 @@ export default function BMSDashboard() {
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200 hover:scale-105'
                 }`}
               >
-                {tf.charAt(0).toUpperCase() + tf.slice(1)}
+                {tf === 'today' ? 'Today' : 
+                 tf === '7days' ? '7 Days' : 
+                 '30 Days'}
               </button>
             ))}
           </div>
@@ -299,122 +435,50 @@ export default function BMSDashboard() {
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis 
-                        dataKey="period" 
-                        tick={{ fontSize: 12 }}
-                        stroke="#666"
-                      />
-                      <YAxis 
-                        tick={{ fontSize: 12 }}
-                        stroke="#666"
-                      />
+                    <PieChart>
+                      <Pie
+                        data={chartData}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        label={({ name, value, percentage }) => `${name}: ${value} (${percentage}%)`}
+                        outerRadius={120}
+                        fill="#8884d8"
+                        dataKey="value"
+                      >
+                        {chartData.map((entry, index) => (
+                          <Cell 
+                            key={`cell-${index}`} 
+                            fill={
+                              entry.name === 'Total Chat' ? '#3B82F6' :
+                              entry.name === 'Total Lead' ? '#10B981' :
+                              '#F59E0B'
+                            } 
+                          />
+                        ))}
+                      </Pie>
                       <Tooltip 
                         contentStyle={{
-                          backgroundColor: '#fff',
-                          border: '1px solid #e5e7eb',
-                          borderRadius: '8px',
+                          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                          border: '1px solid #ccc',
+                          borderRadius: '4px',
                           boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
                         }}
+                        formatter={(value, name) => [
+                          `${value} (${chartData.find(item => item.name === name)?.percentage}%)`,
+                          name
+                        ]}
                       />
-                      <Legend />
-                      <Line 
-                        type="monotone" 
-                        dataKey="totalChat" 
-                        stroke="#3b82f6" 
-                        strokeWidth={2}
-                        name="Total Chat"
-                        dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
+                      <Legend 
+                        wrapperStyle={{ paddingTop: '20px' }}
+                        formatter={(value, entry) => `${value}: ${entry.payload.value} (${entry.payload.percentage}%)`}
                       />
-                      <Line 
-                        type="monotone" 
-                        dataKey="totalLead" 
-                        stroke="#10b981" 
-                        strokeWidth={2}
-                        name="Total Lead"
-                        dot={{ fill: '#10b981', strokeWidth: 2, r: 4 }}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="totalBuy" 
-                        stroke="#f59e0b" 
-                        strokeWidth={2}
-                        name="Total Buy"
-                        dot={{ fill: '#f59e0b', strokeWidth: 2, r: 4 }}
-                      />
-                    </LineChart>
+                    </PieChart>
                   </ResponsiveContainer>
                 )}
               </div>
             </div>
 
-            {/* Conversion Rate Chart */}
-            <div className="mb-8">
-              <h3 className="text-lg font-semibold text-gray-700 mb-4">Conversion Rate & Buy Value</h3>
-              <div className="h-64">
-                {chartLoading ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis 
-                        dataKey="period" 
-                        tick={{ fontSize: 12 }}
-                        stroke="#666"
-                      />
-                      <YAxis 
-                        yAxisId="left"
-                        tick={{ fontSize: 12 }}
-                        stroke="#666"
-                      />
-                      <YAxis 
-                        yAxisId="right"
-                        orientation="right"
-                        tick={{ fontSize: 12 }}
-                        stroke="#666"
-                      />
-                      <Tooltip 
-                        contentStyle={{
-                          backgroundColor: '#fff',
-                          border: '1px solid #e5e7eb',
-                          borderRadius: '8px',
-                          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
-                        }}
-                        formatter={(value, name) => {
-                          if (name === 'Total Buy Value') {
-                            return [new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(Number(value)), name]
-                          }
-                          return [value, name]
-                        }}
-                      />
-                      <Legend />
-                      <Line 
-                        yAxisId="left"
-                        type="monotone" 
-                        dataKey="conversionRate" 
-                        stroke="#10b981" 
-                        strokeWidth={2}
-                        name="Conversion Rate (%)"
-                        dot={{ fill: '#10b981', strokeWidth: 2, r: 4 }}
-                      />
-                      <Line 
-                        yAxisId="right"
-                        type="monotone" 
-                        dataKey="totalBuyValue" 
-                        stroke="#8b5cf6" 
-                        strokeWidth={2}
-                        name="Total Buy Value"
-                        dot={{ fill: '#8b5cf6', strokeWidth: 2, r: 4 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                )}
-              </div>
-            </div>
           </div>
         </div>
 
